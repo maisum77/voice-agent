@@ -1,0 +1,23 @@
+# Model weights and archives (large, downloaded or derived)
+models/
+*.zip
+*.safetensors
+*.npz
+
+# Derived datasets (regenerate with `make data` and `make annotate`)
+data/base/
+data/annotated/
+
+# Native build output
+native/sayd
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Benchmark artefacts
+bench/audio/*.aiff
+bench/audition/*.wav
+*.log
