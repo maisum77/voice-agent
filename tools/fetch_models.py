@@ -24,6 +24,8 @@ from pathlib import Path
 DEFAULT_REPOS = {
     "teacher": "mlx-community/Qwen3.5-9B-4bit",
     "mlx_base": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+    # Build-time only: renders the emotion reference clips. Never shipped.
+    "tts_design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
 }
 
 # Small files we never need to bother resuming.

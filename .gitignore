@@ -21,3 +21,6 @@ venv/
 bench/audio/*.aiff
 bench/audition/*.wav
 *.log
+
+# macOS
+.DS_Store
