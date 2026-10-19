@@ -171,7 +171,7 @@ def validate_reply(text: str) -> list[str]:
         issues.append("empty")
         return issues
 
-    if not re.match(r"^\s*\[emotion:%s\]" % "|".join(DELIVERY_EMOTIONS), text):
+    if not re.match(r"^\s*\[emotion:(%s)\]" % "|".join(DELIVERY_EMOTIONS), text):
         issues.append("missing_or_misplaced_delivery_tag")
 
     words = word_count(text)

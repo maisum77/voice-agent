@@ -63,6 +63,18 @@ REFERENCE_LINE = (
     "work through it together."
 )
 
+# Non-verbal clips are rendered as short lines that *contain* the sound, then
+# used verbatim when spliced into a reply. They have to be in the same voice
+# as the delivery clips, or the splice is audible.
+NONVERBAL_LINES = {
+    "laugh": "Ha! Ha! That is brilliant, genuinely.",
+    "chuckle": "Heh. Nice one, that.",
+    "sigh": "Ohhh. Right then. Deep breath.",
+    "gasp": "Ah! Well, that is unexpected.",
+    "hm": "Hmm. Right, let me think about that.",
+    "erm": "Erm. Let me see.",
+}
+
 SPEAKER_HINT = (
     "A warm British male voice in his early thirties, low and unhurried, "
     "with a dry, self-aware sense of humour and a naturally gentle manner."
@@ -126,11 +138,33 @@ def render_bank(
         }
         print(f"    {len(audio) / sr:.2f}s -> {path}")
 
+    # Non-verbal clips, same voice, same description.
+    nonverbals = {}
+    neutral_instruct = build_instruct(description, "neutral")
+    for name, line in NONVERBAL_LINES.items():
+        print(f"  rendering {name}...")
+        wavs, sr = model.generate_voice_design(
+            text=line,
+            language="English",
+            instruct=neutral_instruct,
+        )
+        audio = np.asarray(wavs[0], dtype="float32")
+        path = out_dir / f"nv_{name}.wav"
+        sf.write(str(path), audio, sr)
+        nonverbals[name] = {
+            "file": f"nv_{name}.wav",
+            "sample_rate": int(sr),
+            "duration_s": round(len(audio) / sr, 3),
+            "ref_text": line,
+        }
+        print(f"    {len(audio) / sr:.2f}s -> {path}")
+
     manifest = {
         "model": model_path,
         "description": description,
         "reference_line": REFERENCE_LINE,
         "clips": clips,
+        "nonverbals": nonverbals,
     }
     write_json(out_dir / "bank.json", manifest)
     print(f"-> {out_dir / 'bank.json'}")
@@ -183,6 +217,18 @@ def check_consistency(bank_dir: Path, threshold: float = 0.80) -> dict:
 
             audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
         vectors[emotion] = extractor.extract(audio, sr=16000)
+
+    # The non-verbal clips must also be the same voice, or a splice is
+    # audible.
+    for name, info in manifest.get("nonverbals", {}).items():
+        audio, sr = sf.read(str(bank_dir / info["file"]), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        if sr != 16000:
+            import librosa
+
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+        vectors[f"nv_{name}"] = extractor.extract(audio, sr=16000)
 
     mean = np.mean(list(vectors.values()), axis=0)
     sims = {

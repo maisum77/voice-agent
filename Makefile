@@ -4,11 +4,14 @@ TEACHER := models/teacher/Qwen3.5-9B-4bit
 MLXBASE := models/llm/qwen35_08b_mlx_bf16
 
 .DEFAULT_GOAL := help
-.PHONY: help fetch data clean persona teacher annotate gate flatten train eval all smoke clean-models
+.PHONY: help fetch data clean persona teacher annotate gate flatten train eval all smoke test clean-models
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+test: ## run the tag vocabulary round-trip tests
+	$(PY) tools/test_tags.py
 
 fetch: ## download the teacher and the MLX base (resumable)
 	$(PY) tools/fetch_models.py
@@ -52,6 +55,16 @@ extract: ## multimodal merged checkpoint -> text-only
 
 mlx-adapter: ## PEFT adapter -> MLX adapter format
 	$(PY) tools/convert_peft_to_mlx_adapter.py
+
+train-mlx: ## continue training under MLX (native DeltaNet kernels, much faster)
+	$(PY) tools/train_emotion_lora_mlx.py --data data/annotated/train.jsonl \
+	  --out models/llm/agents3_emotion_adapter_mlx
+
+voice-bank: ## design the voice and render the emotion reference clips
+	$(PY) tools/design_voice.py --model Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+
+audition: ## render the model's replies to audio
+	$(PY) bench/audition.py --adapter models/llm/agents3_emotion_adapter/adapter
 
 smoke: ## end-to-end plumbing check with the local (weak) teacher
 	$(PY) tools/load_dataset.py

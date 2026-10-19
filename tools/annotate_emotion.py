@@ -498,14 +498,21 @@ def parse_mode_b(text: str) -> tuple[str | None, str | None]:
 
 
 def majority_label(
-    teacher: Teacher, voter: Teacher, messages: list[dict]
+    teacher: Teacher, voter: Teacher, messages: list[dict], vote_tokens: int = 24
 ) -> tuple[str | None, int, int]:
-    """Sample the delivery label three times. Returns (label, votes, samples)."""
+    """Sample the delivery label three times. Returns (label, votes, samples).
+
+    ``vote_tokens`` has to be large enough to reach the tag. In Mode A the tag
+    is the first thing in the reply, so a couple of dozen tokens is plenty. In
+    Mode B the tag sits on the second line, behind the USER line - a short
+    budget would stop before reaching it and every vote would come back
+    empty.
+    """
     votes: list[str | None] = []
     for temp, max_tokens, t in (
         (0.0, 320, teacher),
-        (0.7, 24, voter),
-        (0.7, 24, voter),
+        (0.7, vote_tokens, voter),
+        (0.7, vote_tokens, voter),
     ):
         text = t.chat(messages, temperature=temp, max_tokens=max_tokens)
         votes.append(extract_tag(text))
@@ -524,6 +531,27 @@ def majority_label(
 # --------------------------------------------------------------------------
 
 
+def clean_and_check(reply: str) -> tuple[str, list[str]]:
+    """Clean a teacher reply and report anything still wrong with it.
+
+    The teacher is asked for clean text, but a 0.8B-scale model will still
+    occasionally emit an emoji, a stray backtick or a code fence. Those must
+    not reach the training set, so they are stripped here and the remaining
+    problems are recorded so the flattener can drop the example.
+    """
+    from normalize_spoken import normalize, validate_reply
+
+    tag = ""
+    m = DELIVERY_RE.search(reply or "")
+    if m:
+        tag = m.group(0)
+    body = TAG_RE.sub("", reply or "").strip()
+    body = normalize(body)
+    cleaned = f"{tag} {body}".strip() if tag else body
+    issues = validate_reply(cleaned)
+    return cleaned, issues
+
+
 def annotate_one(
     teacher: Teacher,
     voter: Teacher,
@@ -537,6 +565,7 @@ def annotate_one(
         "source": rec["source"],
         "base_user": rec["user"],
         "base_reply": None,
+        "base_raw": None,
         "base_emotion": None,
         "base_votes": 0,
         "variants": [],
@@ -552,14 +581,18 @@ def annotate_one(
         },
     ]
     try:
-        label, votes, _ = majority_label(teacher, voter, a_msgs)
+        label, votes, _ = majority_label(teacher, voter, a_msgs, vote_tokens=24)
         draft = teacher.chat(a_msgs, temperature=0.0, max_tokens=320)
         reply = clean_reply(draft)
+        out["base_raw"] = draft
         if label and not reply.startswith("[emotion:"):
             reply = f"[emotion:{label}]" + reply
+        reply, issues = clean_and_check(reply)
         out["base_reply"] = reply
         out["base_emotion"] = extract_tag(reply) or label
         out["base_votes"] = votes
+        if issues:
+            out["base_issues"] = issues
     except TeacherError as exc:
         out["errors"].append(f"mode_a: {exc}")
 
@@ -573,24 +606,32 @@ def annotate_one(
             },
         ]
         try:
-            label, votes, _ = majority_label(teacher, voter, b_msgs)
+            # Mode B puts the tag on the second line, behind the USER line,
+            # so the vote budget has to cover both.
+            label, votes, _ = majority_label(teacher, voter, b_msgs, vote_tokens=80)
             draft = teacher.chat(b_msgs, temperature=0.0, max_tokens=320)
             user_line, reply_line = parse_mode_b(draft)
             if not user_line or not reply_line:
                 out["errors"].append(f"mode_b[{affect}]: unparseable")
+                out["variants"].append(
+                    {"affect": affect, "raw": draft, "unparsed": True}
+                )
                 continue
             reply_line = clean_reply(reply_line)
             if label and not reply_line.startswith("[emotion:"):
                 reply_line = f"[emotion:{label}]" + reply_line
-            out["variants"].append(
-                {
-                    "affect": affect,
-                    "user": user_line,
-                    "reply": reply_line,
-                    "emotion": extract_tag(reply_line) or label,
-                    "votes": votes,
-                }
-            )
+            reply_line, issues = clean_and_check(reply_line)
+            entry = {
+                "affect": affect,
+                "user": user_line,
+                "reply": reply_line,
+                "emotion": extract_tag(reply_line) or label,
+                "votes": votes,
+                "raw": draft,
+            }
+            if issues:
+                entry["issues"] = issues
+            out["variants"].append(entry)
         except TeacherError as exc:
             out["errors"].append(f"mode_b[{affect}]: {exc}")
 
@@ -631,6 +672,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="0 = all")
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--min-votes", type=int, default=2, help="majority needed to accept")
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero if the teacher is not producing usable tags",
+    )
     args = ap.parse_args()
 
     affects = tuple(a.strip() for a in args.affects.split(",") if a.strip())
@@ -716,6 +762,12 @@ def main() -> int:
         "with_base_reply": len(accepted),
         "ambiguous_base": len(ambiguous),
         "variants": sum(len(r.get("variants", [])) for r in all_rows),
+        "variants_parsed": sum(
+            1
+            for r in all_rows
+            for v in r.get("variants", [])
+            if not v.get("unparsed")
+        ),
         "base_label_distribution": label_counts,
         "variant_label_distribution": variant_counts,
         "teacher_calls": teacher.calls,
@@ -727,6 +779,22 @@ def main() -> int:
     }
     write_json(args.report, report)
     print(json.dumps(report, indent=2))
+
+    # Fail fast on a teacher that is not following the format. Catching this
+    # after 400 calls is expensive; catching it here is free.
+    if all_rows:
+        tagged = report["with_base_reply"] + report["variants_parsed"]
+        total = len(all_rows) + report["variants"]
+        rate = tagged / total if total else 0
+        if rate < 0.5:
+            print(
+                f"\nWARNING: only {rate:.0%} of teacher outputs carried a usable "
+                f"tag. The teacher is not following the format - check the "
+                f"prompt, or try a different model, before annotating the rest.",
+                file=sys.stderr,
+            )
+            if args.strict:
+                return 1
     return 0
 
 

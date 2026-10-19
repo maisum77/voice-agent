@@ -79,25 +79,67 @@ def main() -> int:
     splits: dict[str, list[dict]] = {"train": [], "valid": [], "test": []}
     tagged_count = 0
     untagged_count = 0
+    dropped: list[dict] = []
+
+    def acceptable(reply: str, issues: list[str] | None) -> list[str]:
+        """Problems with a training target, empty list if it is usable.
+
+        A reply that is too long, still has markdown in it, or carries a
+        non-verbal in a serious turn would teach the model to do the same.
+        """
+        from normalize_spoken import validate_reply
+
+        found = list(issues or []) + [
+            i for i in validate_reply(reply) if i not in (issues or [])
+        ]
+        return found
+
     for rec in records:
         split = split_of.get(rec["id"], "train")
         if rec.get("base_reply") and rec.get("base_emotion"):
-            splits[split].append(make_message(rec["base_user"], rec["base_reply"]))
-            tagged_count += 1
+            problems = acceptable(rec["base_reply"], rec.get("base_issues"))
+            if not problems:
+                splits[split].append(make_message(rec["base_user"], rec["base_reply"]))
+                tagged_count += 1
+            else:
+                dropped.append({"id": rec["id"], "kind": "base", "issues": problems})
         for var in rec.get("variants", []):
             if var.get("reply") and var.get("emotion"):
-                splits[split].append(make_message(var["user"], var["reply"]))
-                tagged_count += 1
+                problems = acceptable(var["reply"], var.get("issues"))
+                if not problems:
+                    splits[split].append(make_message(var["user"], var["reply"]))
+                    tagged_count += 1
+                else:
+                    dropped.append(
+                        {
+                            "id": f"{rec['id']}:{var.get('affect')}",
+                            "kind": "variant",
+                            "issues": problems,
+                        }
+                    )
 
     # -- replay mixture (untagged persona turns) ------------------------
+    # The replay turns exist to teach "not every reply carries a tag" and to
+    # stop the emotion pass from drifting the persona. They must therefore be
+    # in the *canonical* register.
+    #
+    # Taking them from the raw sources would reintroduce the joyful register
+    # of the deepseek and hand-written sets, and the model would learn to
+    # answer in that voice whenever it omits a tag - the exact drift we are
+    # trying to prevent. So the replay comes from the teacher's own replies
+    # with the delivery tag removed.
     replay: list[dict] = []
-    if args.replay_source.exists():
+    for rec in records:
+        if rec.get("base_reply"):
+            reply = strip_tags(rec["base_reply"]).strip()
+            if reply:
+                replay.append(make_message(rec["base_user"], reply))
+
+    if not replay and args.replay_source.exists():
         for rec in read_jsonl(args.replay_source):
             reply = rec["assistant"].strip()
-            if not reply:
-                continue
-            replay.append(make_message(rec["user"], reply))
-            untagged_count += 1
+            if reply:
+                replay.append(make_message(rec["user"], reply))
 
     rng.shuffle(replay)
     n_replay = int(len(splits["train"]) * args.replay_frac)
@@ -124,6 +166,8 @@ def main() -> int:
         "groups": len(ids),
         "split_sizes": {k: len(v) for k, v in splits.items()},
         "tagged_examples": tagged_count,
+        "dropped_malformed": len(dropped),
+        "dropped_examples": dropped[:40],
         "untagged_replay_examples": min(n_replay, len(replay)),
         "replay_pool": len(replay),
         "label_distribution": {k: label_hist(v) for k, v in splits.items()},
@@ -135,6 +179,9 @@ def main() -> int:
     for k, v in splits.items():
         print(f"  {k:6s} {len(v):4d}  {label_hist(v)}")
     print(f"replay added: {min(n_replay, len(replay))} untagged turns")
+    print(f"dropped as malformed: {len(dropped)}")
+    for d in dropped[:5]:
+        print(f"   {d['id']}: {d.get('issues')}")
     print(f"-> {args.out_dir}")
     return 0
 
