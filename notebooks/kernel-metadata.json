@@ -1,0 +1,17 @@
+{
+  "id": "maisumabbas/agents3-emotion-training",
+  "title": "Emotion training for the Qwen3.5-0.8B desktop companion",
+  "code_file": "train_emotion_kaggle.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": ["voice-assistant", "qwen", "lora", "tts", "emotion"],
+  "dataset_sources": [
+    "maisumabbas/agents3-persona-lora"
+  ],
+  "competition_sources": [],
+  "model_sources": []
+}

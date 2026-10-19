@@ -24,3 +24,6 @@ bench/audition/*.wav
 
 # macOS
 .DS_Store
+
+# Kaggle upload bundle
+dist/
