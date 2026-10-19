@@ -222,8 +222,16 @@ from normalize_spoken import normalize, validate_reply
 import segmenter
 from segmenter import parse_tagged_reply, spoken_text
 
+# The pipeline keeps its own paths relative to itself, so the annotated
+# dataset and the teacher cache have to be read from there too. If they were
+# written somewhere else the cache would never be found and every re-run
+# would pay for the teacher again.
+ANN_DIR = common.ANNOTATED
+ANN_DIR.mkdir(parents=True, exist_ok=True)
+
 print("emotions:", DELIVERY_EMOTIONS)
 print("nonverbals:", NONVERBALS)
+print("annotated dir:", ANN_DIR)
 '''
 
 CODE_TEST = '''# --- the tag vocabulary has to round-trip ------------------------------------
@@ -437,8 +445,11 @@ if TEACHER_QUANT == "4bit":
         print("bitsandbytes unavailable, using bf16")
         TEACHER_ID, TEACHER_QUANT = "Qwen/Qwen3-4B-Instruct-2507", "bf16"
 
-TEACHER_DIR = MODELS / "teacher" / TEACHER_ID.replace("/", "_")
-TEACHER_DIR.mkdir(parents=True, exist_ok=True)
+# The teacher is loaded through transformers, straight onto the GPU - on
+# Kaggle the GPU is the scarce thing and a server would be one more part.
+# "auto" quantization means 4-bit on CUDA, full precision elsewhere, and the
+# teacher runs in bfloat16 rather than float32: at float32 an 8B teacher
+# wants 32 GB and will not fit on the card it is meant to run on.
 '''
 
 CODE_ANNOTATE = '''# --- annotate -----------------------------------------------------------------
@@ -455,10 +466,11 @@ sys.argv = [
     "--backend", "local",
     "--model", TEACHER_DIR.as_posix() if False else TEACHER_ID,
     "--in", str(BASE_DIR / "train.jsonl"),
-    "--out", str(DATA / "annotated" / "annotated.jsonl"),
-    "--report", str(DATA / "annotated" / "annotate_report.json"),
+    "--out", str(ANN_DIR / "annotated.jsonl"),
+    "--report", str(ANN_DIR / "annotate_report.json"),
     "--affects", AFFECTS,
     "--device", "cuda",
+    "--quantization", TEACHER_QUANT,
     "--warmup", "3",
     "--limit", str(ANNOTATE_LIMIT),
 ]
@@ -474,8 +486,8 @@ CODE_GATE = '''# --- the gate --------------------------------------------------
 # table instead of affect-reading.
 sys.argv = [
     "gate",
-    "--in", str(DATA / "annotated" / "annotated.jsonl"),
-    "--out", str(DATA / "annotated" / "leakage_report.json"),
+    "--in", str(ANN_DIR / "annotated.jsonl"),
+    "--out", str(ANN_DIR / "leakage_report.json"),
 ]
 import check_tag_leakage
 rc = check_tag_leakage.main()
@@ -489,7 +501,7 @@ if rc != 0:
 '''
 
 CODE_REVIEW = '''# --- read the samples before trusting them -------------------------------------
-sys.argv = ["show", "--in", str(DATA / "annotated" / "annotated.jsonl"), "--n", "10"]
+sys.argv = ["show", "--in", str(ANN_DIR / "annotated.jsonl"), "--n", "10"]
 import show_samples
 show_samples.main()
 '''
@@ -502,8 +514,8 @@ CODE_FLATTEN = '''# --- splits, with a replay mixture --------------------------
 # answer in that voice whenever it omits a tag.
 sys.argv = [
     "flatten",
-    "--in", str(DATA / "annotated" / "annotated.jsonl"),
-    "--out-dir", str(DATA / "annotated"),
+    "--in", str(ANN_DIR / "annotated.jsonl"),
+    "--out-dir", str(ANN_DIR),
 ]
 import flatten_dataset
 flatten_dataset.main()
@@ -515,8 +527,8 @@ CODE_TRAIN = '''# --- train ----------------------------------------------------
 # single file that merges and converts to GGUF cleanly.
 sys.argv = [
     "train",
-    "--data", str(DATA / "annotated" / "train.jsonl"),
-    "--valid-data", str(DATA / "annotated" / "valid.jsonl"),
+    "--data", str(ANN_DIR / "train.jsonl"),
+    "--valid-data", str(ANN_DIR / "valid.jsonl"),
     "--base", str(MODELS / "llm" / "agents3_text_base"),
     "--adapter", str(MODELS / "llm" / "agents3_lora_patched"),
     "--out", str(MODELS / "llm" / "agents3_emotion_adapter"),
@@ -537,12 +549,12 @@ CODE_EVAL = '''# --- evaluate --------------------------------------------------
 # regression in the persona shows up as a change in length or distinct-2.
 sys.argv = [
     "eval",
-    "--annotated", str(DATA / "annotated" / "annotated.jsonl"),
+    "--annotated", str(ANN_DIR / "annotated.jsonl"),
     "--base", str(MODELS / "llm" / "agents3_text_base"),
     "--adapters",
     "baseline=" + str(MODELS / "llm" / "agents3_lora_patched") + ","
     "emotion=" + str(MODELS / "llm" / "agents3_emotion_adapter" / "adapter"),
-    "--out", str(DATA / "annotated" / "eval_report.json"),
+    "--out", str(ANN_DIR / "eval_report.json"),
     "--device", "cuda",
 ]
 import eval_emotion
@@ -556,9 +568,9 @@ import shutil, json
 OUTDIR = WORK / "emotion_adapter"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 shutil.copytree(MODELS / "llm" / "agents3_emotion_adapter", OUTDIR / "adapter", dirs_exist_ok=True)
-shutil.copy2(DATA / "annotated" / "annotated.jsonl", OUTDIR / "annotated.jsonl")
+shutil.copy2(ANN_DIR / "annotated.jsonl", OUTDIR / "annotated.jsonl")
 for name in ("annotate_report.json", "leakage_report.json", "split_report.json", "eval_report.json"):
-    p = DATA / "annotated" / name
+    p = ANN_DIR / name
     if p.exists():
         shutil.copy2(p, OUTDIR / name)
 
@@ -578,7 +590,7 @@ for p in sorted(OUTDIR.rglob("*")):
 # What the trained model actually says.
 print()
 print("=" * 70)
-for line in (DATA / "annotated" / "annotated.jsonl").read_text().splitlines()[:4]:
+for line in (ANN_DIR / "annotated.jsonl").read_text().splitlines()[:4]:
     rec = json.loads(line)
     if rec.get("base_reply"):
         print("USER :", rec["base_user"][:90])

@@ -253,16 +253,29 @@ tools/
   common.py                  shared paths, tag vocabulary, persona
   load_dataset.py            three sources -> one record shape
   normalize_spoken.py        strip emoji/markdown/code, validate replies
-  annotate_emotion.py        Mode A + Mode B, three teacher backends
-  check_tag_leakage.py       G1-G4
+  annotate_emotion.py        Mode A + Mode B, four teacher backends, 3-shot
+  check_tag_leakage.py       G1-G5, the gate that proves the data teaches
+                             affect rather than a lookup table
   flatten_dataset.py         group-aware splits + replay mixture
   extract_text_model.py      multimodal -> text-only
   convert_peft_to_mlx_adapter.py
-  train_emotion_lora.py      PEFT continuation, G3, speed probe
+  train_emotion_lora.py      PEFT continuation, G3 target assertion
+  train_emotion_lora_mlx.py  fast path (native DeltaNet kernels)
   eval_emotion.py            teacher agreement + regression vs baseline
+  design_voice.py            voice bank: emotion baked into reference clips
   fetch_models.py            resumable download for a flaky link
+  show_samples.py            read the teacher's output before trusting it
+  test_tags.py               tag vocabulary round-trip tests
+  build_kaggle_notebook.py   generates the Kaggle notebook from these files
+  test_kaggle_notebook.py    runs that notebook's cells on a laptop
 pipeline/
   tts/segmenter.py           tagged reply -> speech + non-verbal segments
+  tts/qwen3.py               bank cloning, splicing, interruption guard
+bench/
+  audition.py                render the model's replies to audio
+  audio/prompts.json         the audition prompt set
+notebooks/
+  train_emotion_kaggle.ipynb generated, self-contained
 data/
   persona/system_prompt.txt  the canonical prompt
   base/                      140 unified records, split 112/14/14

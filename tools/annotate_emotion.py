@@ -372,18 +372,28 @@ class AnthropicTeacher(Teacher):
 class LocalTorchTeacher(Teacher):
     """Fully offline fallback: run a local HF model through transformers.
 
-    Only useful for shaking the pipeline out and as a last-resort annotator -
-    a model the same size as the student is a weak teacher. Use it to debug
-    the plumbing, not to produce the training set.
+    This is the backend the Kaggle notebook uses, because on Kaggle the GPU
+    is the thing that is scarce and a server is one more moving part.
+
+    It can also be used as a weak teacher offline - but a model the same size
+    as the student amplifies the student's own biases, which is exactly the
+    failure the teacher is supposed to prevent. Use it to debug the plumbing,
+    not to produce the training set.
     """
 
     backend = "local"
 
-    def __init__(self, model_path: Path, cache_path: Path | None = None,
-                 device: str = "auto"):
+    def __init__(
+        self,
+        model_path: Path,
+        cache_path: Path | None = None,
+        device: str = "auto",
+        quantization: str = "auto",
+    ):
         super().__init__(str(model_path), cache_path)
         self.model_path = Path(model_path)
         self.device = device
+        self.quantization = quantization
         self._model = None
         self._tok = None
         self._lock2 = threading.Lock()
@@ -396,14 +406,43 @@ class LocalTorchTeacher(Teacher):
 
         device = self.device
         if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else (
-                "mps" if torch.backends.mps.is_available() else "cpu"
+            device = (
+                "cuda"
+                if torch.cuda.is_available()
+                else ("mps" if torch.backends.mps.is_available() else "cpu")
             )
-        self._tok = AutoTokenizer.from_pretrained(self.model_path)
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.model_path, dtype=torch.float32
-        ).to(device).eval()
         self.device = device
+
+        # bf16 on CUDA. fp32 for a multi-billion-parameter teacher is twice
+        # the memory and will not fit on the GPU it is meant to run on.
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
+        kwargs = {"dtype": dtype}
+        quant = self.quantization
+        if quant == "auto":
+            quant = "4bit" if device == "cuda" else "none"
+        if quant == "4bit":
+            try:
+                from transformers import BitsAndBytesConfig
+
+                kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=dtype,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+                kwargs["device_map"] = "auto"
+            except Exception as exc:
+                print(f"  4-bit loading unavailable ({exc}); using bf16")
+                kwargs.pop("quantization_config", None)
+                kwargs.pop("device_map", None)
+        elif device == "cuda":
+            kwargs["device_map"] = "auto"
+
+        print(f"  loading teacher {self.model_path} on {device} ({quant})")
+        self._tok = AutoTokenizer.from_pretrained(self.model_path)
+        self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **kwargs)
+        self._model.eval()
 
     def _request(self, messages, temperature, max_tokens):
         import torch
@@ -414,7 +453,7 @@ class LocalTorchTeacher(Teacher):
                 messages, tokenize=False, add_generation_prompt=True,
                 enable_thinking=False,
             )
-            ids = self._tok(prompt, return_tensors="pt").to(self.device)
+            ids = self._tok(prompt, return_tensors="pt").to(self._model.device)
             with torch.no_grad():
                 out = self._model.generate(
                     **ids,
@@ -426,7 +465,9 @@ class LocalTorchTeacher(Teacher):
             text = self._tok.decode(
                 out[0][ids["input_ids"].shape[1] :], skip_special_tokens=True
             )
-            return text, {"output_tokens": int(out.shape[1] - ids["input_ids"].shape[1])}
+            return text, {
+                "output_tokens": int(out.shape[1] - ids["input_ids"].shape[1])
+            }
 
 
 def build_teacher(args) -> Teacher:
@@ -436,7 +477,9 @@ def build_teacher(args) -> Teacher:
     if args.backend == "anthropic":
         return AnthropicTeacher(args.base_url, args.model, cache, args.api_key)
     if args.backend == "local":
-        return LocalTorchTeacher(Path(args.model), cache, args.device)
+        return LocalTorchTeacher(
+            Path(args.model), cache, args.device, getattr(args, "quantization", "auto")
+        )
     raise SystemExit(f"unknown backend {args.backend}")
 
 
@@ -664,6 +707,13 @@ def main() -> int:
     )
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument(
+        "--quantization",
+        default="auto",
+        choices=["auto", "4bit", "none"],
+        help="local backend only: 4-bit loading needs bitsandbytes and a CUDA "
+        "GPU. 'auto' uses 4-bit on CUDA and full precision elsewhere.",
+    )
     ap.add_argument(
         "--affects",
         default="frustrated,delighted",
