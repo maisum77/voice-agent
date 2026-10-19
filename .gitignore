@@ -27,3 +27,4 @@ bench/audition/*.wav
 
 # Kaggle upload bundle
 dist/
+.venv-tts/
