@@ -167,7 +167,7 @@ python3 -m venv .venv --system-site-packages
 # 3. annotate
 .venv/bin/python tools/annotate_emotion.py \
     --backend openai --model models/teacher/Qwen3.5-9B-4bit \
-    --in data/base/train.jsonl
+    --in data/base/train.clean.jsonl
 
 # 4. gate
 .venv/bin/python tools/check_tag_leakage.py --strict
@@ -181,6 +181,27 @@ python3 -m venv .venv --system-site-packages
 ```
 
 `make help` lists the same steps as targets.
+
+### Train on Kaggle, not on a laptop
+
+**This is the recommended way to train.** Qwen3.5's 18 Gated DeltaNet layers
+have no fused kernel outside CUDA — `fla`, `causal_conv1d` and `kernels` are
+all CUDA-only — so on an M-series Mac every optimizer step falls back to a
+pure-PyTorch reference implementation. Measured on this machine: **100 seconds
+per step**. On a Kaggle T4, the same code runs in seconds.
+
+`notebooks/train_emotion_kaggle.ipynb` is a self-contained notebook that does
+the whole pipeline on Kaggle's GPU. It is *generated* from the tools in this
+repository, so it cannot drift away from the code here:
+
+```bash
+python3 tools/build_kaggle_notebook.py    # rebuild the notebook
+python3 tools/test_kaggle_notebook.py     # run its cells on a laptop, to check
+```
+
+The only thing to attach is a Kaggle dataset containing `agents3_lora(1).zip`.
+See `notebooks/README.md`.
+
 
 ---
 

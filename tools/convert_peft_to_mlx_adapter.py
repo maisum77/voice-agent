@@ -45,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from common import LORA_DIR, MLX_ADAPTER_DIR  # noqa: E402
+from common import LORA_DIR, MLX_ADAPTER_DIR, MLX_BASE_DIR  # noqa: E402
 
 PEFT_PREFIX = "base_model.model.model.language_model.layers."
 MLX_PREFIX = "language_model.model.layers."
@@ -127,19 +127,18 @@ def convert(peft_dir: Path, out_dir: Path, num_layers: int = 24) -> dict:
     }
 
 
-def verify(adapter_dir: Path, peft_dir: Path, prompt: str) -> dict:
+def verify(adapter_dir: Path, base_dir: Path, prompt: str) -> dict:
     """Load the MLX base + converted adapter and check it produces output."""
+    from mlx_lm.generate import generate
     from mlx_lm.utils import load
 
-    model, tokenizer = load(str(adapter_dir.parent / "base"), adapter_path=str(adapter_dir))
+    model, tokenizer = load(str(base_dir), adapter_path=str(adapter_dir))
     messages = [{"role": "user", "content": prompt}]
     template = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+        messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
     )
-    from mlx_lm.generate import generate
-
     text = generate(model, tokenizer, prompt=template, max_tokens=64, verbose=False)
-    return {"output": text}
+    return {"output": text, "template_tail": template[-80:]}
 
 
 def main() -> int:
@@ -148,6 +147,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=MLX_ADAPTER_DIR)
     ap.add_argument("--num-layers", type=int, default=24)
     ap.add_argument("--verify", action="store_true", help="generate a sample")
+    ap.add_argument("--base", type=Path, default=MLX_BASE_DIR)
     args = ap.parse_args()
 
     info = convert(args.peft, args.out, args.num_layers)
@@ -158,7 +158,9 @@ def main() -> int:
     print(f"-> {args.out}")
 
     if args.verify:
-        out = verify(args.out, args.peft, "The printer produced beautiful gibberish.")
+        out = verify(args.out, args.base, "The printer produced beautiful gibberish.")
+        print("\n--- prompt tail ---")
+        print(repr(out["template_tail"]))
         print("\n--- sample generation ---")
         print(out["output"])
     return 0

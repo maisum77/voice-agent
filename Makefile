@@ -29,6 +29,18 @@ teacher: ## serve the teacher model (leave running in another terminal)
 	$(PY) -m mlx_lm server --model $(TEACHER) --port $(PORT) \
 	  --chat-template-args '{"enable_thinking":false}' --temp 0.7
 
+sample: ## annotate 20 examples so they can be reviewed before spending the rest
+	$(PY) tools/annotate_emotion.py \
+	  --backend openai --model $(TEACHER) \
+	  --in data/base/train.clean.jsonl \
+	  --out data/annotated/sample.jsonl \
+	  --report data/annotated/sample_report.json \
+	  --limit 20 --affects frustrated,delighted
+	$(PY) tools/show_samples.py --in data/annotated/sample.jsonl --n 20
+
+review: ## show the annotated samples for review
+	$(PY) tools/show_samples.py --in data/annotated/annotated.jsonl --n 30
+
 annotate: ## run the teacher over the dataset
 	$(PY) tools/annotate_emotion.py \
 	  --backend openai --model $(TEACHER) \

@@ -58,6 +58,59 @@ def build_batches(examples: list[dict], batch_size: int, seed: int) -> list[list
     return batches
 
 
+def install_trainable_attention() -> None:
+    """Swap MLX's fused attention for a differentiable one.
+
+    ``mx.fast.scaled_dot_product_attention`` picks a "vector" kernel for this
+    model's head dimension, and that kernel does not produce a logsumexp, so
+    its vector-Jacobian product is unavailable. The backward pass fails with
+    "the VJP path requires the full-attention kernel".
+
+    The replacement is plain matmul and softmax. It is slower than the fused
+    kernel, which is the trade the training run makes; inference still uses
+    the fast path, because this patch is only installed for training.
+    """
+    import mlx.core as mx
+    from mlx_lm.models import qwen3_next
+
+    def trainable_sdpa(
+        queries, keys, values, scale=None, mask=None, sinks=None, cache=None, **kwargs
+    ):
+        if sinks is not None:
+            raise NotImplementedError("attention sinks are not used by this model")
+        if cache is not None and hasattr(cache, "bits"):
+            raise NotImplementedError("quantized caches are inference only")
+        if scale is None:
+            scale = 1.0 / (queries.shape[-1] ** 0.5)
+
+        n_q = queries.shape[1]
+        n_kv = keys.shape[1]
+        if n_kv != n_q:
+            # Grouped-query attention: repeat the kv heads up to the query
+            # count rather than pre-tiling, which is what MLX expects.
+            repeat = n_q // n_kv
+            keys = mx.repeat(keys, repeat, axis=1)
+            values = mx.repeat(values, repeat, axis=1)
+
+        scores = (queries * scale) @ keys.transpose(0, 1, 3, 2)
+
+        if mask is not None:
+            if isinstance(mask, str):
+                if mask != "causal":
+                    raise NotImplementedError(f"mask {mask!r}")
+                t = scores.shape[2]
+                rows = mx.arange(t)[:, None]
+                cols = mx.arange(t)[None]
+                mask = (rows >= cols)[None, None]
+            # A boolean mask marks the positions to keep.
+            scores = mx.where(mask, scores, mx.finfo(scores.dtype).min)
+
+        weights = mx.softmax(scores.astype(mx.float32), axis=-1)
+        return weights.astype(values.dtype) @ values
+
+    qwen3_next.scaled_dot_product_attention = trainable_sdpa
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", type=Path, required=True)
@@ -82,23 +135,42 @@ def main() -> int:
     from mlx_lm.tuner.utils import load_adapters
     from mlx_lm.utils import load
 
+    install_trainable_attention()
+
     print(f"loading base: {args.base}")
     model, tokenizer = load(str(args.base))
     print(f"loading adapter: {args.adapter}")
     load_adapters(model, str(args.adapter))
 
+    # Training mode matters here: the DeltaNet's gated delta rule uses a fused
+    # Metal kernel for inference, and that kernel has no vector-Jacobian
+    # product, so the backward pass fails with "Not implemented for
+    # CustomKernel". The model switches to the pure-MLX implementation when
+    # it is in training mode, which is differentiable.
+    model.train()
+
     # Freeze everything, then unfreeze just the LoRA parameters.
+    #
+    # MLX tracks frozen parameters per module by their *local* names, so this
+    # has to be the leaf names ("lora_a", "lora_b"), not the full paths -
+    # passing paths silently unfreezes nothing and the optimiser then has no
+    # arguments to differentiate.
     model.freeze()
+    model.unfreeze(keys=["lora_a", "lora_b"])
     lora_keys = [
         k
         for k, _ in tree_flatten(model.parameters())
         if k.rsplit(".", 1)[-1] in ("lora_a", "lora_b")
     ]
     model.unfreeze(keys=lora_keys)
-    n_trainable = sum(
-        v.size for k, v in tree_flatten(model.parameters()) if k in set(lora_keys)
-    )
-    print(f"trainable parameters: {n_trainable:,} in {len(lora_keys)} tensors")
+    trainable = dict(tree_flatten(model.trainable_parameters()))
+    n_trainable = sum(v.size for v in trainable.values())
+    print(f"trainable parameters: {n_trainable:,} in {len(trainable)} tensors")
+    if not trainable:
+        raise SystemExit(
+            "no trainable parameters - the LoRA layers were not created, so the "
+            "adapter did not apply to this model"
+        )
 
     records = read_jsonl(args.data)
     print(f"records: {len(records)}")
@@ -117,7 +189,12 @@ def main() -> int:
     def loss(model, inputs, targets, mask):
         logits = model(inputs)
         ce = nn.losses.cross_entropy(logits, targets) * mask
-        return ce.astype(mx.float32).sum() / mx.maximum(mask.sum(), 1)
+        ntoks = mask.sum()
+        ce = ce.astype(mx.float32).sum() / mx.maximum(ntoks, 1)
+        # A tuple, not a bare scalar: MLX's value_and_grad hands the return
+        # value straight back, and the caller unpacks (value, aux). Returning a
+        # 0-d array here makes that unpack try to iterate the array.
+        return ce, ntoks
 
     optimizer = optim.AdamW(learning_rate=args.lr)
     loss_value_and_grad = nn.value_and_grad(model, loss)
@@ -129,11 +206,14 @@ def main() -> int:
             pad = width - len(b["input_ids"])
             ids.append(b["input_ids"] + [0] * pad)
             labels.append(b["labels"] + [-100] * pad)
+        # The mask has to be built from the Python lists, not from the MLX
+        # array: `if v == -100` on a 0-d MLX bool tries to iterate it.
+        mask_rows = completion_mask([row[1:] for row in labels])
         ids = mx.array(ids, dtype=mx.int32)
         labels = mx.array(labels, dtype=mx.int32)
         inputs = ids[:, :-1]
         targets = labels[:, 1:]
-        mask = mx.array(completion_mask(labels[:, 1:]), dtype=mx.float32)
+        mask = mx.array(mask_rows, dtype=mx.float32)
         return inputs, targets, mask
 
     warmup = max(1, int(total_steps * args.warmup_ratio))

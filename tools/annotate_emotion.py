@@ -677,6 +677,14 @@ def main() -> int:
         action="store_true",
         help="exit non-zero if the teacher is not producing usable tags",
     )
+    ap.add_argument(
+        "--warmup",
+        type=int,
+        default=2,
+        help="throwaway requests before annotating. A freshly started server "
+        "answers the first call or two before it is warmed up, and those "
+        "answers come back in the wrong format.",
+    )
     args = ap.parse_args()
 
     affects = tuple(a.strip() for a in args.affects.split(",") if a.strip())
@@ -701,6 +709,25 @@ def main() -> int:
         vargs.model = args.vote_model
         voter = build_teacher(vargs)
     print(f"teacher: {args.backend}/{args.model}  voter: {args.vote_model or args.model}")
+
+    if args.warmup and todo:
+        # A freshly started server answers the first call or two before it is
+        # warm, and those answers come back in the wrong format - the model
+        # echoes the draft instead of tagging it. Burn them here instead of
+        # letting them into the training set.
+        print(f"warming up ({args.warmup} requests)...")
+        for i in range(args.warmup):
+            try:
+                teacher.chat(
+                    [
+                        {"role": "user", "content": "Say the word READY."},
+                    ],
+                    temperature=0.0,
+                    max_tokens=8,
+                )
+            except TeacherError as exc:
+                print(f"  warmup {i + 1} failed: {exc}")
+        teacher._cache_save()
 
     results: list[dict] = []
     lock = threading.Lock()

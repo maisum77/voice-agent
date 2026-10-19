@@ -184,6 +184,18 @@ def write_json(path: Path, obj) -> None:
 # --------------------------------------------------------------------------
 
 
+def encode_ids(tokenizer, text: str) -> list[int]:
+    """Token ids for a string, for either a HF tokenizer or an MLX wrapper.
+
+    ``mlx_lm`` wraps the HF tokenizer in a ``TokenizerWrapper`` that is not
+    itself callable, but keeps the original at ``_tokenizer``.
+    """
+    fn = tokenizer if callable(tokenizer) else getattr(tokenizer, "_tokenizer", None)
+    if fn is None:
+        raise TypeError(f"cannot encode with {type(tokenizer).__name__}")
+    return fn(text, add_special_tokens=False)["input_ids"]
+
+
 def build_tokenized_examples(
     records: list[dict], tokenizer, max_len: int = 1024
 ) -> list[dict]:
@@ -205,8 +217,8 @@ def build_tokenized_examples(
         )
         full_text = prompt_text + msgs[-1]["content"] + "<|im_end|>\n"
 
-        prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-        full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"]
+        prompt_ids = encode_ids(tokenizer, prompt_text)
+        full_ids = encode_ids(tokenizer, full_text)
 
         n = min(len(prompt_ids), len(full_ids))
         cut = 0
