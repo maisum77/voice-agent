@@ -60,18 +60,21 @@ def repo_files(repo: str) -> list[dict]:
     return out
 
 
-def fetch(repo: str, name: str, dest: Path, expected: int, attempts: int = 40) -> bool:
+def fetch(repo: str, name: str, dest: Path, expected: int, attempts: int = 60) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://huggingface.co/{repo}/resolve/main/{name}"
     for attempt in range(attempts):
         if dest.exists() and expected and dest.stat().st_size >= expected:
             return True
         cmd = [
-            "curl", "-L", "-C", "-", "--fail", "--silent", "--show-error",
-            "--connect-timeout", "20", "--max-time", "900",
-            "--speed-limit", "1024", "--speed-time", "60",
+            # HTTP/1.1 rather than HTTP/2: the CDN keeps cancelling HTTP/2
+            # streams on this link, and each cancel costs a reconnect.
+            "curl", "--http1.1", "-L", "-C", "-", "--fail", "--silent",
+            "--show-error", "--connect-timeout", "30", "--max-time", "7200",
             "-o", str(dest), url,
         ]
+        # No --speed-limit: on a slow but steady link, aborting for being slow
+        # just throws away the connection and the bytes already transferred.
         subprocess.run(cmd, check=False)
         have = dest.stat().st_size if dest.exists() else 0
         if expected and have >= expected:

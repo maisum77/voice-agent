@@ -44,6 +44,7 @@ flatten: ## annotated -> train/valid/test with a replay mixture
 train: ## continue training the LoRA on the emotion data
 	$(PY) tools/train_emotion_lora.py \
 	  --data data/annotated/train.jsonl \
+	  --valid-data data/annotated/valid.jsonl \
 	  --out models/llm/agents3_emotion_adapter
 
 eval: ## teacher agreement + regression against the baseline

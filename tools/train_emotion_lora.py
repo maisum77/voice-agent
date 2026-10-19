@@ -261,11 +261,38 @@ def train(args) -> int:
     )
     scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
+    history: list[dict] = []
+
     pad_id = tokenizer.pad_token_id
     step = 0
     t0 = time.time()
     probe_done = False
     probe_times: list[float] = []
+
+    val_examples = (
+        build_examples(read_jsonl(args.valid_data), tokenizer, args.max_seq_length)
+        if args.valid_data and args.valid_data.exists()
+        else []
+    )
+    if val_examples:
+        print(f"validation examples: {len(val_examples)}")
+    else:
+        print("no validation set - skipping validation loss")
+
+    def evaluate() -> float | None:
+        if not val_examples:
+            return None
+        model.eval()
+        total, count = 0.0, 0
+        with torch.no_grad():
+            for i in range(0, len(val_examples), args.batch_size):
+                batch = collate(val_examples[i : i + args.batch_size], pad_id)
+                batch = {k: v.to(device) for k, v in batch.items()}
+                out = model(**batch)
+                total += out.loss.item() * len(batch["input_ids"])
+                count += len(batch["input_ids"])
+        model.train()
+        return total / count if count else None
 
     for epoch in range(args.epochs):
         epoch_batches = make_batches(examples, args.batch_size, args.seed + epoch)
@@ -310,6 +337,11 @@ def train(args) -> int:
                         flush=True,
                     )
 
+        val = evaluate()
+        if val is not None:
+            print(f"  epoch {epoch + 1}/{args.epochs} validation loss {val:.4f}")
+            history.append({"epoch": epoch + 1, "step": step, "val_loss": val})
+
     print(f"\ntraining done in {(time.time() - t0) / 60:.1f} min")
     model.save_pretrained(str(args.out / "adapter"))
     print(f"saved adapter -> {args.out / 'adapter'}")
@@ -321,6 +353,7 @@ def train(args) -> int:
             "dtype": str(dtype),
             "records": len(records),
             "examples": len(examples),
+            "validation_examples": len(val_examples),
             "epochs": args.epochs,
             "lr": args.lr,
             "batch_size": args.batch_size,
@@ -328,6 +361,7 @@ def train(args) -> int:
             "total_steps": total_steps,
             "minutes": round((time.time() - t0) / 60, 2),
             "trainable_parameters": n_trainable,
+            "validation_history": history,
         },
     )
     return 0
@@ -336,6 +370,12 @@ def train(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", type=Path, required=True)
+    ap.add_argument(
+        "--valid-data",
+        type=Path,
+        default=None,
+        help="validation split, for the per-epoch loss curve",
+    )
     ap.add_argument("--base", type=Path, default=TEXT_BASE_DIR)
     ap.add_argument("--adapter", type=Path, default=LORA_DIR)
     ap.add_argument("--out", type=Path, default=Path("models/llm/agents3_emotion_adapter"))
