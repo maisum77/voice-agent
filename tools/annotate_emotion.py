@@ -710,9 +710,10 @@ def main() -> int:
     ap.add_argument(
         "--quantization",
         default="auto",
-        choices=["auto", "4bit", "none"],
+        choices=["auto", "4bit", "none", "bf16"],
         help="local backend only: 4-bit loading needs bitsandbytes and a CUDA "
-        "GPU. 'auto' uses 4-bit on CUDA and full precision elsewhere.",
+        "GPU. 'auto' uses 4-bit on CUDA and full precision elsewhere. 'none' "
+        "and 'bf16' both mean full precision, in bfloat16 on CUDA.",
     )
     ap.add_argument(
         "--affects",

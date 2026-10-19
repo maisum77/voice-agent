@@ -51,7 +51,7 @@ def main() -> int:
             # swapped for their CPU equivalents. The logic is untouched.
             .replace('device_map="cuda"', 'device_map="cpu"')
             .replace('torch.bfloat16', 'torch.float32')
-            .replace('"--device", "cuda"', '"--device", "cpu"')
+            .replace('"--device", "cuda"', '"--device", "mps"')
         )
         if "pip install" in src:
             print(f"\n=== cell {i}: (install) skipped ===")
@@ -86,7 +86,7 @@ def main() -> int:
                         f'"--model", {str(ROOT / "models/llm/agents3_text_base")!r},',
                     )
                 if "ANNOTATE_LIMIT" in run_src:
-                    run_src = run_src.replace('ANNOTATE_LIMIT = 0', 'ANNOTATE_LIMIT = 8')
+                    run_src = run_src.replace('ANNOTATE_LIMIT = 0', 'ANNOTATE_LIMIT = 3')
                 if "train_emotion_lora.main()" in run_src:
                     run_src = run_src.replace('"--epochs", str(EPOCHS),',
                                               '"--epochs", "1", "--probe-only", "--probe-steps", "1",')

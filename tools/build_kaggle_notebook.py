@@ -459,25 +459,45 @@ CODE_ANNOTATE = '''# --- annotate ----------------------------------------------
 #
 # A local teacher is used rather than a served one: on Kaggle the GPU is
 # already busy, and a server adds a moving part.
+#
+# If a pre-annotated dataset is attached, that is used instead and the
+# annotation is skipped. Annotating takes the bulk of the GPU time, and the
+# teacher is by far the largest model in the run, so a dataset annotated
+# elsewhere turns this notebook into a short training job.
 import time
 
-sys.argv = [
-    "annotate",
-    "--backend", "local",
-    "--model", TEACHER_DIR.as_posix() if False else TEACHER_ID,
-    "--in", str(BASE_DIR / "train.jsonl"),
-    "--out", str(ANN_DIR / "annotated.jsonl"),
-    "--report", str(ANN_DIR / "annotate_report.json"),
-    "--affects", AFFECTS,
-    "--device", "cuda",
-    "--quantization", TEACHER_QUANT,
-    "--warmup", "3",
-    "--limit", str(ANNOTATE_LIMIT),
-]
-import annotate_emotion
-t0 = time.time()
-rc = annotate_emotion.main()
-print("annotation finished in %.1f min" % ((time.time() - t0) / 60))
+_pre = None
+for _pat in ("/kaggle/input/**/annotated.jsonl", "/kaggle/input/**/*annotated*.jsonl"):
+    _hits = [Path(p) for p in glob.glob(_pat, recursive=True)]
+    if _hits:
+        _pre = _hits[0]
+        break
+
+if _pre is not None:
+    print("using the pre-annotated dataset:", _pre)
+    ANN_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_pre, ANN_DIR / "annotated.jsonl")
+    for _extra in glob.glob(str(_pre.parent / "*.json")):
+        shutil.copy2(_extra, ANN_DIR / Path(_extra).name)
+    print("skipped annotation")
+else:
+    sys.argv = [
+        "annotate",
+        "--backend", "local",
+        "--model", TEACHER_ID,
+        "--in", str(BASE_DIR / "train.jsonl"),
+        "--out", str(ANN_DIR / "annotated.jsonl"),
+        "--report", str(ANN_DIR / "annotate_report.json"),
+        "--affects", AFFECTS,
+        "--device", "cuda",
+        "--quantization", TEACHER_QUANT,
+        "--warmup", "3",
+        "--limit", str(ANNOTATE_LIMIT),
+    ]
+    import annotate_emotion
+    t0 = time.time()
+    rc = annotate_emotion.main()
+    print("annotation finished in %.1f min" % ((time.time() - t0) / 60))
 '''
 
 CODE_GATE = '''# --- the gate -----------------------------------------------------------------

@@ -27,6 +27,19 @@ Everything else — the DeepSeek set, the hand-written pairs, the whole
 pipeline — is embedded in the notebook, so there is nothing else to attach
 and nothing to keep in sync.
 
+### Optional: a pre-annotated dataset
+
+The annotation is the slow part of the run, and the teacher is by far the
+largest model in it. If you attach a dataset that contains an
+`annotated.jsonl` (plus the report JSONs, if you have them), the notebook
+finds it and **skips the annotation entirely** — turning the run into a
+short training job of a few minutes.
+
+That is how the run that produced the first emotion adapter was done: the
+teacher was a local Qwen3.5-9B, the annotation happened on a workstation,
+and only the training went to Kaggle.
+
+
 ## Running it
 
 1. Open `train_emotion_kaggle.ipynb` in Kaggle.
