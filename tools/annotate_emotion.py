@@ -266,7 +266,10 @@ class Teacher:
             self.calls += 1
             for k in self.usage:
                 self.usage[k] += usage.get(k, 0)
-            if self.calls % 20 == 0:
+            # Flush often. An annotation run is long and a crash should not
+            # cost more than a handful of calls - the teacher is the slowest
+            # and most expensive part of the whole pipeline.
+            if self.calls % 5 == 0:
                 self._cache_save()
         return text
 

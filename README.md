@@ -161,8 +161,12 @@ python3 -m venv .venv --system-site-packages
     --in data/base/train.jsonl --out data/base/train.clean.jsonl
 
 # 2. teacher
+# --prompt-cache-size 0: the prompt cache deadlocks the mlx_lm server on
+# this model. It hangs after the prefill, at 0% CPU, and only a restart
+# clears it. Without the cache a call costs about 15 s instead of 10.
 .venv/bin/python -m mlx_lm server --model models/teacher/Qwen3.5-9B-4bit \
-    --port 8081 --chat-template-args '{"enable_thinking":false}'
+    --port 8081 --chat-template-args '{"enable_thinking":false}' \
+    --prompt-cache-size 0
 
 # 3. annotate
 .venv/bin/python tools/annotate_emotion.py \

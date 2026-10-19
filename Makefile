@@ -27,7 +27,8 @@ data: ## unify the three dataset sources and split them
 
 teacher: ## serve the teacher model (leave running in another terminal)
 	$(PY) -m mlx_lm server --model $(TEACHER) --port $(PORT) \
-	  --chat-template-args '{"enable_thinking":false}' --temp 0.7
+	  --chat-template-args '{"enable_thinking":false}' --temp 0.7 \
+	  --prompt-cache-size 0
 
 sample: ## annotate 20 examples so they can be reviewed before spending the rest
 	$(PY) tools/annotate_emotion.py \
