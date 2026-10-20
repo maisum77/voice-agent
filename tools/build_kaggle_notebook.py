@@ -159,14 +159,22 @@ below - `/kaggle/input` is searched for the zip.
 """
 
 CODE_INSTALL = """# --- dependencies -----------------------------------------------------------
-# torch is already on Kaggle; the rest is small.
+# torch is already on Kaggle; the rest is small. bitsandbytes is what makes
+# the 4-bit teacher possible, and a 4-bit 8B is a materially better teacher
+# than a full-precision 4B, so it is worth having.
 %pip install -q --upgrade pip
 %pip install -q peft accelerate scikit-learn soundfile numpy huggingface_hub
+%pip install -q bitsandbytes
 
 import subprocess, sys
 print(subprocess.run([sys.executable, "-c", "import torch, peft, transformers, sklearn; "
       "print('torch', torch.__version__, '| peft', peft.__version__, '| transformers', transformers.__version__)"],
       capture_output=True, text=True).stdout)
+try:
+    import bitsandbytes
+    print("bitsandbytes", bitsandbytes.__version__)
+except Exception as exc:
+    print("bitsandbytes unavailable:", exc)
 """
 
 CODE_CONFIG = """# --- configuration -----------------------------------------------------------
