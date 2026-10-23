@@ -86,6 +86,27 @@ MAX_SPOKEN_WORDS = 30
 # Hard cap for the length gate; a few outliers are tolerated in the median.
 MAX_SPOKEN_WORDS_P95 = 40
 
+# Qwen3.5 turn markers. `<|im_end|>` is what the chat template emits at the
+# end of every assistant turn and what the trainer appends to every target.
+# The HF config shipped with 248044 (`<|endoftext|>`) as EOS, so generation
+# never stopped on the marker the model was trained to emit and ran straight
+# into the next turn. Both ids are kept as stops for safety.
+IM_START_TOKEN = "<|im_start|>"
+IM_END_TOKEN = "<|im_end|>"
+END_OF_TEXT_TOKEN = "<|endoftext|>"
+HF_STOP_TOKEN_IDS = (248046, 248044)
+
+
+def special_token_id(tokenizer, token: str) -> int | None:
+    """The id of a special token, or None if this tokenizer does not know it."""
+    try:
+        tid = tokenizer.convert_tokens_to_ids(token)
+    except Exception:
+        return None
+    if tid is None or tid == getattr(tokenizer, "unk_token_id", None):
+        return None
+    return int(tid)
+
 
 def strip_tags(text: str) -> str:
     """Remove every emotion/non-verbal tag, leaving spoken words only."""
@@ -215,7 +236,7 @@ def build_tokenized_examples(
         prompt_text = tokenizer.apply_chat_template(
             msgs[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
-        full_text = prompt_text + msgs[-1]["content"] + "<|im_end|>\n"
+        full_text = prompt_text + msgs[-1]["content"] + IM_END_TOKEN + "\n"
 
         prompt_ids = encode_ids(tokenizer, prompt_text)
         full_ids = encode_ids(tokenizer, full_text)
@@ -224,6 +245,24 @@ def build_tokenized_examples(
         cut = 0
         while cut < n and prompt_ids[cut] == full_ids[cut]:
             cut += 1
+
+        # The target must end with the turn marker, and the mask boundary must
+        # land at the assistant turn. Both are silent failures otherwise:
+        # a target without <|im_end|> never learns to stop, and an early cut
+        # trains the model to generate the tail of the prompt.
+        im_end = special_token_id(tokenizer, IM_END_TOKEN)
+        if im_end is None:
+            raise SystemExit("tokenizer does not know <|im_end|>")
+        if im_end not in full_ids[-3:]:
+            raise SystemExit(
+                f"target does not end with <|im_end|>: {full_ids[-4:]}"
+            )
+        if cut < len(prompt_ids) - 1:
+            raise SystemExit(
+                "prompt/target boundary mismatch: "
+                f"cut={cut} prompt_tokens={len(prompt_ids)} "
+                f"prompt_tail={prompt_text[-40:]!r}"
+            )
 
         ids = full_ids[:max_len]
         labels = [-100] * cut + full_ids[cut:max_len]

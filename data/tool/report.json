@@ -1,0 +1,44 @@
+{
+  "rows": 142,
+  "splits": {
+    "train": 364,
+    "valid": 27,
+    "eval": 75
+  },
+  "functions": [
+    "app.close",
+    "app.focus",
+    "app.launch",
+    "fs.copy",
+    "fs.delete",
+    "fs.list",
+    "fs.move",
+    "fs.read",
+    "fs.write",
+    "mem.read",
+    "mem.write",
+    "proc.kill",
+    "proc.list",
+    "shell.run",
+    "sys.info",
+    "sys.pkg",
+    "sys.power",
+    "sys.service",
+    "ui.clipboard",
+    "ui.notify",
+    "ui.volume"
+  ],
+  "groups": [
+    "app",
+    "ask",
+    "fs",
+    "mem",
+    "multi",
+    "proc",
+    "refuse",
+    "shell",
+    "sys",
+    "ui"
+  ],
+  "tool_prompt_chars": 1008
+}

@@ -71,8 +71,11 @@ def peft_module_names(adapter_dir: Path) -> set[str]:
     state = load_file(str(adapter_dir / "adapter_model.safetensors"))
     names = set()
     for key in state:
+        # Accept both the multimodal key layout (the adapter as shipped) and
+        # the text-only layout (the pre-patched copy the Colab notebook builds
+        # before merging). Passing either one to --adapter must work.
         m = re.match(
-            r"^base_model\.model\.model\.language_model\.layers\.(\d+)\.(.+)\.lora_([AB])\.weight$",
+            r"^base_model\.model\.model\.(?:language_model\.)?layers\.(\d+)\.(.+)\.lora_([AB])\.weight$",
             key,
         )
         if m:
@@ -197,9 +200,30 @@ def train(args) -> int:
         else:
             device = "cpu"
 
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    if device == "cuda":
+        # T4 (sm_75) has no native bf16; PyTorch emulates it and it is slow.
+        # fp16 + GradScaler is the correct path on free Colab. The explicit
+        # flag matters because `is_bf16_supported()` can lie on a virtualised
+        # runtime and silently put the T4 on the slow emulated path.
+        if args.dtype == "auto":
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        elif args.dtype == "fp16":
+            dtype = torch.float16
+        elif args.dtype == "bf16":
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float32
+    else:
+        dtype = torch.float32
+    amp_dtype = dtype if device == "cuda" else torch.float32
+    use_scaler = device == "cuda" and dtype == torch.float16
 
     print(f"device: {device}  dtype: {dtype}")
+    if device == "cuda":
+        print(
+            f"gpu: {torch.cuda.get_device_name(0)}  "
+            f"capability: {torch.cuda.get_device_capability(0)}"
+        )
     tokenizer = AutoTokenizer.from_pretrained(args.base)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -259,7 +283,7 @@ def train(args) -> int:
     sched = get_cosine_schedule_with_warmup(
         optim, int(total_steps * args.warmup_ratio), total_steps
     )
-    scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 
     history: list[dict] = []
 
@@ -301,7 +325,7 @@ def train(args) -> int:
             batch = collate(batch, pad_id)
             batch = {k: v.to(device) for k, v in batch.items()}
             with torch.amp.autocast(
-                device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")
+                device_type="cuda", dtype=amp_dtype, enabled=(device == "cuda")
             ):
                 out = model(**batch)
                 loss = out.loss / args.grad_accum
@@ -341,6 +365,11 @@ def train(args) -> int:
         if val is not None:
             print(f"  epoch {epoch + 1}/{args.epochs} validation loss {val:.4f}")
             history.append({"epoch": epoch + 1, "step": step, "val_loss": val})
+        if args.save_each_epoch:
+            # Free Colab can drop the session at any time. Saving after every
+            # epoch means a disconnect costs one epoch, not the whole run.
+            model.save_pretrained(str(args.out / "adapter"))
+            print(f"  checkpoint saved -> {args.out / 'adapter'}")
 
     print(f"\ntraining done in {(time.time() - t0) / 60:.1f} min")
     model.save_pretrained(str(args.out / "adapter"))
@@ -350,7 +379,11 @@ def train(args) -> int:
         args.out / "train_report.json",
         {
             "device": device,
+            "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
+            "capability": list(torch.cuda.get_device_capability(0)) if device == "cuda" else None,
             "dtype": str(dtype),
+            "amp_dtype": str(amp_dtype),
+            "use_grad_scaler": use_scaler,
             "records": len(records),
             "examples": len(examples),
             "validation_examples": len(val_examples),
@@ -380,6 +413,12 @@ def main() -> int:
     ap.add_argument("--adapter", type=Path, default=LORA_DIR)
     ap.add_argument("--out", type=Path, default=Path("models/llm/agents3_emotion_adapter"))
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
+    ap.add_argument(
+        "--dtype",
+        default="auto",
+        choices=["auto", "fp16", "bf16", "fp32"],
+        help="force fp16 on a T4; auto trusts is_bf16_supported()",
+    )
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--weight-decay", type=float, default=0.0)
@@ -394,6 +433,8 @@ def main() -> int:
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--probe-steps", type=int, default=10)
     ap.add_argument("--probe-only", action="store_true")
+    ap.add_argument("--save-each-epoch", action="store_true", default=True)
+    ap.add_argument("--no-save-each-epoch", dest="save_each_epoch", action="store_false")
     ap.add_argument("--assert-targets", action="store_true", default=True)
     return train(ap.parse_args())
 

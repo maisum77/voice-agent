@@ -40,6 +40,11 @@ TAG_RE = re.compile(
     + r"|\[(?P<nonverbal>%s)\]" % "|".join(NONVERBALS)
 )
 
+# A tool call is control data, not speech. The runtime parses it and strips
+# it before the text ever reaches the TTS engine, but strip it here as well so
+# a missed parse can never make the agent read JSON aloud.
+TOOL_CALL_RE = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+
 
 @dataclass
 class Segment:
@@ -61,8 +66,10 @@ def parse_tagged_reply(text: str) -> list[Segment]:
     """Split a tagged reply into speech and non-verbal segments.
 
     The delivery tag that opens the reply applies to every speech segment
-    until another delivery tag appears.
+    until another delivery tag appears. Tool-call blocks are control data and
+    are removed before segmentation.
     """
+    text = TOOL_CALL_RE.sub("", text)
     segments: list[Segment] = []
     emotion = DEFAULT_EMOTION
     pos = 0
@@ -124,7 +131,7 @@ LOOSE_TAG_RE = re.compile(
 
 def strip_all_tags(text: str) -> str:
     """Remove every tag, including ones with an unknown emotion value."""
-    return LOOSE_TAG_RE.sub("", text).strip()
+    return LOOSE_TAG_RE.sub("", TOOL_CALL_RE.sub("", text)).strip()
 
 
 def emotion_of(text: str) -> str:

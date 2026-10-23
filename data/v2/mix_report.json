@@ -1,0 +1,10 @@
+{
+  "train": 653,
+  "valid": 82,
+  "emotion_train": 289,
+  "tool_train": 364,
+  "tool_train_with_call": 308,
+  "tool_train_no_call": 56,
+  "tool_fraction": 0.5574,
+  "tool_eval_held_out": "data/tool/valid.jsonl"
+}

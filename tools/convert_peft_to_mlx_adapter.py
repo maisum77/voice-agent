@@ -18,7 +18,7 @@ matches: PEFT uses ``alpha / r`` and MLX uses a ``scale`` parameter, so
 
 Naming
 ------
-PEFT   base_model.model.model.language_model.layers.{L}.{mod}.lora_A.weight
+PEFT   base_model.model.model[.language_model].layers.{L}.{mod}.lora_A.weight
 MLX    language_model.model.layers.{L}.{mod}.lora_a
 
 ``{mod}`` is identical on both sides (``mlp.gate_proj``, ``self_attn.q_proj``),
@@ -47,11 +47,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import LORA_DIR, MLX_ADAPTER_DIR, MLX_BASE_DIR  # noqa: E402
 
-PEFT_PREFIX = "base_model.model.model.language_model.layers."
+# The multimodal base names the stack `model.language_model.layers`, while the
+# text-only export (the one the emotion adapter was trained on) drops
+# `language_model`. Accept both; the MLX target is always the same path.
+PEFT_PREFIXES = (
+    "base_model.model.model.language_model.layers.",
+    "base_model.model.model.layers.",
+)
 MLX_PREFIX = "language_model.model.layers."
 
 PEFT_RE = re.compile(
-    r"^base_model\.model\.model\.language_model\.layers\.(\d+)\.(.+)\.lora_(A|B)\.weight$"
+    r"^base_model\.model\.model\.(?:language_model\.)?layers\.(\d+)\.(.+)\.lora_(A|B)\.weight$"
 )
 
 

@@ -1,0 +1,41 @@
+{
+  "source_records": 176,
+  "groups": 176,
+  "split_sizes": {
+    "train": 289,
+    "valid": 55,
+    "test": 51
+  },
+  "test_groups": 26,
+  "test_annotated_records": 26,
+  "tagged_examples": 347,
+  "dropped_malformed": 0,
+  "dropped_examples": [],
+  "untagged_replay_examples": 48,
+  "replay_pool": 124,
+  "label_distribution": {
+    "train": {
+      "amused": 69,
+      "serious": 61,
+      "warm": 52,
+      "untagged": 48,
+      "focused": 32,
+      "neutral": 27
+    },
+    "valid": {
+      "amused": 16,
+      "warm": 16,
+      "serious": 11,
+      "focused": 7,
+      "neutral": 5
+    },
+    "test": {
+      "amused": 13,
+      "serious": 12,
+      "warm": 11,
+      "focused": 8,
+      "neutral": 7
+    }
+  },
+  "persona_chars": 1388
+}

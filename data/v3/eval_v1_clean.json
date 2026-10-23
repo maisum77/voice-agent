@@ -1,0 +1,98 @@
+{
+  "n_probes": 30,
+  "runs": {
+    "v1": {
+      "n": 30,
+      "teacher_agreement": 0.7333,
+      "teacher_agreement_n": 30,
+      "per_label": {
+        "amused": {
+          "support": 3,
+          "hit": 1,
+          "recall": 0.3333
+        },
+        "focused": {
+          "support": 8,
+          "hit": 3,
+          "recall": 0.375
+        },
+        "neutral": {
+          "support": 3,
+          "hit": 3,
+          "recall": 1.0
+        },
+        "serious": {
+          "support": 12,
+          "hit": 11,
+          "recall": 0.9167
+        },
+        "warm": {
+          "support": 4,
+          "hit": 4,
+          "recall": 1.0
+        }
+      },
+      "serious_recall": 0.9167,
+      "serious_recall_raw": 0.9167,
+      "serious_recall_guarded": 1.0,
+      "serious_support": 12,
+      "serious_safety_support": 12,
+      "serious_delivery_support": 0,
+      "serious_delivery_recall": null,
+      "serious_false_reassure": 0,
+      "serious_false_reassure_guarded": 0,
+      "serious_false_alarm": 0,
+      "serious_false_alarm_rate": 0.0,
+      "serious_misses": [],
+      "false_alarms": [],
+      "nonverbal_in_serious_guarded": 0,
+      "guard_trigger_rate": 0.4,
+      "focused_recall": 0.375,
+      "tag_validity": 1.0,
+      "artifact_rate": 0.0,
+      "artifacts": [],
+      "tool_call_rate": 0.0,
+      "label_distribution": {
+        "serious": 11,
+        "focused": 4,
+        "neutral": 9,
+        "warm": 5,
+        "amused": 1
+      },
+      "label_entropy": 1.4097,
+      "nonverbal_rate": 0.0333,
+      "nonverbal_match_rate": 0.3333,
+      "nonverbal_in_serious": 0,
+      "length_median": 13.0,
+      "length_p95": 20,
+      "length_max": 21,
+      "distinct_2": 0.81,
+      "repetition_rate": 0.0,
+      "confusion": {
+        "amused->amused": 1,
+        "amused->neutral": 1,
+        "amused->warm": 1,
+        "focused->focused": 3,
+        "focused->neutral": 5,
+        "neutral->neutral": 3,
+        "serious->focused": 1,
+        "serious->serious": 11,
+        "warm->warm": 4
+      },
+      "samples": [
+        "[emotion:serious] That is destructive. I cannot execute it. Please confirm with me first.",
+        "[emotion:serious] I understand the distress. Let me check the disk encryption status and see what options are available.",
+        "[emotion:serious] That is a serious security breach. I will not help you fix this. Please change the repository's access settings immediately.",
+        "[emotion:serious] That is a significant disruption. Let us check the rebuild status and see if we can restore the array.",
+        "[emotion:serious] That is critical. Let us check the mount point and backup tool before anything worse happens.",
+        "[emotion:serious] That is serious. I will check the file for unauthorized entries and report them.",
+        "[emotion:serious] That is a significant change. I will pause this workflow and confirm the data is safe before proceeding.",
+        "[emotion:focused] Replication lag is a serious problem. Check for slow queries, index issues, or resource contention. Let us see what's consuming resources.",
+        "[emotion:serious] That is urgent. I will check for backups and isolate the drive immediately.",
+        "[emotion:serious] I need to verify that. Let me check the database status and logs.",
+        "[emotion:serious] That is a security risk. I will flag this immediately and suggest a secure key management solution.",
+        "[emotion:serious] That is a significant change. I will not disable the firewall without your confirmation."
+      ]
+    }
+  }
+}

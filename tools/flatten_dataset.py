@@ -130,6 +130,11 @@ def main() -> int:
     # with the delivery tag removed.
     replay: list[dict] = []
     for rec in records:
+        # Replay must come from the training groups only. Pulling an untagged
+        # copy of a test prompt into train is leakage even though the tag is
+        # missing: the model has still seen the user's words and the reply.
+        if split_of.get(rec["id"]) != "train":
+            continue
         if rec.get("base_reply"):
             reply = strip_tags(rec["base_reply"]).strip()
             if reply:
@@ -152,6 +157,12 @@ def main() -> int:
     for key, rows in splits.items():
         write_jsonl(args.out_dir / f"{key}.jsonl", rows)
 
+    # The annotated records for the held-out group. eval_emotion.py takes this
+    # file directly, so the test split is scored on the same probes the model
+    # never trained on (including every affect variant of a test prompt).
+    test_records = [r for r in records if split_of.get(r["id"]) == "test"]
+    write_jsonl(args.out_dir / "test_annotated.jsonl", test_records)
+
     # -- report ----------------------------------------------------------
     def label_hist(rows: list[dict]) -> dict:
         from collections import Counter
@@ -165,6 +176,8 @@ def main() -> int:
         "source_records": len(records),
         "groups": len(ids),
         "split_sizes": {k: len(v) for k, v in splits.items()},
+        "test_groups": sum(1 for v in split_of.values() if v == "test"),
+        "test_annotated_records": len(test_records),
         "tagged_examples": tagged_count,
         "dropped_malformed": len(dropped),
         "dropped_examples": dropped[:40],
