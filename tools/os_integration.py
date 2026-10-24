@@ -23,22 +23,31 @@ Dependencies already present locally:
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import numpy as np  # noqa: E402
+import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 from peft import PeftModel  # noqa: E402
 from pipeline.emotion.guard import apply  # noqa: E402
 from pipeline.tts.segmenter import parse_tagged_reply, spoken_text  # noqa: E402
-from pipeline.tts.qwen3 import GenerationGuard  # noqa: E402
-
+from pipeline.tts.qwen3 import (  # noqa: E402
+    EmotionTTS,
+    GenerationGuard,
+    Qwen3TorchEngine,
+    VoiceBank,
+)
 
 DEFAULT_BASE = ROOT / "models/llm/agents3_text_base"
 DEFAULT_ADAPTER = ROOT / "models/llm/agents3_emotion_adapter/adapter"
+DEFAULT_TTS_MODEL = ROOT / "models/tts_base/Qwen3-TTS-12Hz-0.6B-Base"
 SYSTEM_PROMPT = ROOT / "data" / "persona" / "system_prompt.txt"
 VOICE_BANK = ROOT / "models" / "voice" / "bank"
 
@@ -54,7 +63,8 @@ class VoiceAgent:
     """
 
     def __init__(self, base: Path, adapter: Path, device: str = "mps",
-                 dtype: str = "bfloat16"):
+                 dtype: str = "bfloat16", tts_model: Path = DEFAULT_TTS_MODEL,
+                 tts_device: str = "cpu", tts_dtype: str = "float32"):
         self.device = device
         torch_dtype = {"float32": torch.float32, "bfloat16": torch.bfloat16,
                        "float16": torch.float16}[dtype]
@@ -67,8 +77,11 @@ class VoiceAgent:
         self.model = self.model.to(device).eval()
 
         self.guard = GenerationGuard()
-        self.tts_engine = None          # set once a voice bank is available
+        self.tts_engine = None          # set once setup_tts() runs
         self.voice_bank = None
+        self.tts_model_path = tts_model
+        self.tts_device = tts_device
+        self.tts_dtype = tts_dtype
 
     # ------------------------------------------------------------------ #
     # STT stub: replace with your OS's speech-to-text (e.g. Whisper, VOSK)
@@ -93,11 +106,21 @@ class VoiceAgent:
                   f"{VOICE_BANK} - TTS disabled.")
             print("[integration] run: .venv/bin/python tools/design_voice.py")
             return False
-        from qwen3 import Qwen3TorchEngine  # noqa: F401
-        # Qwen3TorchEngine / Qwen3MNNEngine / KokoroEngine are pluggable.
-        # Instantiate the engine your hardware supports, then:
-        #   self.tts_engine = EmotionTTS(engine, VoiceBank.load(VOICE_BANK), self.guard)
-        print("[integration] voice bank found - wire up your TTS engine here.")
+
+        if not self.tts_model_path.exists():
+            print(f"[integration] TTS model missing at {self.tts_model_path} - "
+                  "TTS disabled.")
+            return False
+
+        print(f"[integration] loading voice bank from {VOICE_BANK} ...")
+        self.voice_bank = VoiceBank.load(VOICE_BANK)
+
+        print(f"[integration] loading TTS engine {self.tts_model_path} "
+              f"on {self.tts_device} ...")
+        engine = Qwen3TorchEngine(self.tts_model_path, device=self.tts_device,
+                                  dtype=self.tts_dtype)
+        self.tts_engine = EmotionTTS(engine, self.voice_bank, self.guard)
+        print("[integration] TTS ready - emotion voice cloning enabled.")
         return True
 
     # ------------------------------------------------------------------ #
@@ -164,18 +187,70 @@ class VoiceAgent:
     # Audio output stub: replace with your OS's audio playback + barge-in
     # ------------------------------------------------------------------ #
     def speak(self, segments: list[dict]) -> None:
-        """Synthesize + play segments. TODO: wire to your OS audio output.
+        """Synthesize + play segments via EmotionTTS + afplay (macOS).
 
-        When a voice bank + TTS engine are set up (see setup_tts), replace
-        this with self.tts_engine.render_streaming(...) and check
-        self.guard.is_current(epoch) between segments for barge-in.
+        Falls back to printing if TTS isn't set up. On barge-in, cancel()
+        bumps the epoch and in-flight synthesis is dropped.
         """
-        print("[integration] audio output not wired - segments to speak:")
-        for seg in segments:
-            if seg["kind"] == "speech":
-                print(f"   [{seg['emotion']}] {seg['text']}")
+        if self.tts_engine is None or self.voice_bank is None:
+            print("[integration] TTS not wired - segments to speak:")
+            for seg in segments:
+                if seg["kind"] == "speech":
+                    print(f"   [{seg['emotion']}] {seg['text']}")
+                else:
+                    print(f"   [nonverbal:{seg['nonverbal']}]")
+            return
+
+        from pipeline.tts.qwen3 import Segment  # noqa: E402
+
+        segs = [
+            Segment(
+                kind=s["kind"],
+                text=s.get("text", ""),
+                emotion=s.get("emotion", "neutral"),
+                nonverbal=s.get("nonverbal", ""),
+            )
+            for s in segments
+        ]
+
+        # Build a tagged reply so EmotionTTS.render handles ordering + splice.
+        tagged = self._segments_to_tagged(segs)
+        print("[integration] synthesizing audio ...")
+        audio, sr = self.tts_engine.render(tagged)
+
+        if len(audio) == 0:
+            print("[integration] no audio produced.")
+            return
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            sf.write(f.name, audio, sr)
+            wav_path = f.name
+
+        print(f"[integration] playing {len(audio) / sr:.2f}s of audio ...")
+        try:
+            subprocess.run(["afplay", wav_path], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            print("[integration] afplay not found - saved to", wav_path)
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
+
+    @staticmethod
+    def _segments_to_tagged(segs) -> str:
+        """Render segments back into a tagged string for EmotionTTS.render."""
+        from pipeline.tts.segmenter import DELIVERY_EMOTIONS, NONVERBALS
+
+        parts = []
+        current_emotion = "neutral"
+        for seg in segs:
+            if seg.kind == "speech":
+                if seg.emotion != current_emotion:
+                    parts.append(f"[emotion:{seg.emotion}]")
+                    current_emotion = seg.emotion
+                parts.append(seg.text)
             else:
-                print(f"   [nonverbal:{seg['nonverbal']}]")
+                parts.append(f"[{seg.nonverbal}]")
+        return "".join(parts)
 
     def cancel(self) -> int:
         """Barge-in: bump the epoch so in-flight synthesis is dropped."""
@@ -191,12 +266,17 @@ def main() -> int:
     ap.add_argument("--prompt", help="single user turn to process")
     ap.add_argument("--interactive", action="store_true",
                     help="REPL: type turns, Ctrl-D to quit")
+    ap.add_argument("--tts-device", default="cpu",
+                    help="cpu | mps | cuda (TTS engine device, default cpu)")
+    ap.add_argument("--tts-dtype", default="float32",
+                    help="float32 | bfloat16 | float16 (TTS engine dtype)")
     ap.add_argument("--setup-tts", action="store_true",
                     help="check for a voice bank and report TTS readiness")
     args = ap.parse_args()
 
     agent = VoiceAgent(args.base, args.adapter, device=args.device,
-                       dtype=args.dtype)
+                       dtype=args.dtype, tts_device=args.tts_device,
+                       tts_dtype=args.tts_dtype)
     agent.setup_tts()
 
     if args.setup_tts:
