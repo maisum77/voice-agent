@@ -140,7 +140,9 @@ class Qwen3TorchEngine(TTSEngine):
 
     name = "qwen3-torch"
 
-    def __init__(self, model_path: Path, device: str = "cpu", dtype: str = "float32"):
+    def __init__(self, model_path: Path, device: str = "cpu", dtype: str = "float32",
+                 temperature: float = 0.7, max_tokens_per_word: int = 6,
+                 max_new_tokens_cap: int = 256, do_sample: bool = True):
         import torch
         from qwen_tts import Qwen3TTSModel
 
@@ -150,18 +152,36 @@ class Qwen3TorchEngine(TTSEngine):
             "float16": torch.float16,
             "bfloat16": torch.bfloat16,
         }[dtype]
+        self.temperature = temperature
+        self.max_tokens_per_word = max_tokens_per_word
+        self.max_new_tokens_cap = max_new_tokens_cap
+        self.do_sample = do_sample
         self.model = Qwen3TTSModel.from_pretrained(
             str(model_path), device_map=device, dtype=self._dtype
         )
 
     def synth(self, text, ref_audio, ref_text):
+        # Bound generation length: ~6 codec tokens per word at 12 Hz,
+        # capped to prevent runaway output. Default 2048 is far too high.
+        # Full-text (non-streaming) mode is required for intelligible ICL
+        # cloning; the streaming-simulation default misaligns ref/text.
+        max_new_tokens = max(24, min(self.max_new_tokens_cap,
+                                     len(text.split()) * self.max_tokens_per_word))
         wavs, sr = self.model.generate_voice_clone(
             text=text,
             language="English",
             ref_audio=str(ref_audio),
             ref_text=ref_text,
+            max_new_tokens=max_new_tokens,
+            non_streaming_mode=True,
+            do_sample=self.do_sample,
+            temperature=self.temperature,
+            repetition_penalty=1.05,
         )
-        return np.asarray(wavs[0], dtype="float32"), int(sr)
+        audio = np.asarray(wavs[0], dtype="float32")
+        if audio.size == 0 or not np.isfinite(audio).all():
+            raise RuntimeError("TTS produced empty or non-finite audio")
+        return audio, int(sr)
 
 
 class Qwen3MNNEngine(TTSEngine):
@@ -235,6 +255,7 @@ class EmotionTTS:
         """Render every segment in order into one waveform."""
         pieces = []
         sr = DEFAULT_SAMPLE_RATE
+        seen_sr = None
         for seg in parse_tagged_reply(tagged_reply):
             if seg.is_speech and not seg.text.strip():
                 continue
@@ -243,8 +264,23 @@ class EmotionTTS:
             audio, seg_sr = self.render_segment(seg)
             if not len(audio):
                 continue
-            pieces.append(audio)
-            sr = seg_sr
+            if seen_sr is None:
+                seen_sr = int(seg_sr)
+                sr = seen_sr
+            elif int(seg_sr) != seen_sr:
+                # Never concatenate at mismatched rates (would change speed).
+                try:
+                    import librosa
+                    audio = librosa.resample(
+                        np.asarray(audio, dtype="float32"),
+                        orig_sr=int(seg_sr), target_sr=seen_sr,
+                    ).astype("float32")
+                except Exception:
+                    raise RuntimeError(
+                        f"sample-rate mismatch: {seg_sr} != {seen_sr}"
+                    )
+            pieces.append(np.asarray(audio, dtype="float32"))
+            sr = seen_sr
         if not pieces:
             return np.zeros(0, dtype="float32"), sr
         return np.concatenate(pieces), sr

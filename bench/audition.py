@@ -84,7 +84,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", type=Path, default=ROOT / "models/llm/agents3_text_base")
     ap.add_argument("--adapter", type=Path, default=None)
-    ap.add_argument("--tts", type=Path, default=ROOT / "models/tts/Qwen3-TTS-12Hz-0.6B-Base")
+    ap.add_argument("--tts", type=Path, default=ROOT / "models/tts_base/Qwen3-TTS-12Hz-0.6B-Base")
     ap.add_argument("--bank", type=Path, default=ROOT / "models/voice/bank")
     ap.add_argument("--prompts", type=Path, default=ROOT / "bench/audio/prompts.json")
     ap.add_argument("--out", type=Path, default=ROOT / "bench/audition")
@@ -127,13 +127,22 @@ def main() -> int:
 
         def render(text: str, emotion: str):
             clip = bank["clips"].get(emotion) or bank["clips"]["neutral"]
+            max_new_tokens = max(24, min(256, len(text.split()) * 6))
             wavs, sr = tts.generate_voice_clone(
                 text=text,
                 language="English",
                 ref_audio=str(args.bank / clip["file"]),
                 ref_text=clip["ref_text"],
+                max_new_tokens=max_new_tokens,
+                non_streaming_mode=True,
+                do_sample=True,
+                temperature=0.7,
+                repetition_penalty=1.05,
             )
-            return np.asarray(wavs[0], dtype="float32"), sr
+            audio = np.asarray(wavs[0], dtype="float32")
+            if audio.size == 0 or not np.isfinite(audio).all():
+                raise RuntimeError("TTS produced empty or non-finite audio")
+            return audio, int(sr)
 
         for i, (p, reply) in enumerate(zip(prompts, replies)):
             segments = parse_tagged_reply(reply)
@@ -163,8 +172,20 @@ def main() -> int:
 
             if not pieces:
                 continue
-            sr = pieces[0][1]
-            merged = np.concatenate([p_[0] for p_ in pieces])
+            target_sr = int(pieces[0][1])
+            merged_audio = []
+            for audio, seg_sr in pieces:
+                audio = np.asarray(audio, dtype="float32")
+                if int(seg_sr) != target_sr:
+                    try:
+                        import librosa
+                        audio = librosa.resample(audio, orig_sr=int(seg_sr),
+                                                target_sr=target_sr).astype("float32")
+                    except Exception:
+                        raise RuntimeError(f"sample-rate mismatch: {seg_sr} != {target_sr}")
+                merged_audio.append(audio)
+            sr = target_sr
+            merged = np.concatenate(merged_audio)
             path = args.out / f"{i:03d}.wav"
             sf.write(str(path), merged, sr)
             elapsed = time.time() - t0

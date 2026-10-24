@@ -193,8 +193,9 @@ def _strip_nonverbals(text: str) -> str:
 def enforce(text: str, serious: bool) -> str:
     """Rewrite the delivery tag and remove non-verbals when serious."""
     out = _strip_nonverbals(text or "")
+    # Remove any delivery tag, including unknown/out-of-vocabulary ones.
+    out = re.sub(r"\[emotion:[^\]]*\]", "", out)
     if serious:
-        out = DELIVERY_RE.sub("", out)
         return "[emotion:serious]" + out.strip()
     out = BARE_TAG_RE.sub("", out).strip()
     if not DELIVERY_RE.search(out):

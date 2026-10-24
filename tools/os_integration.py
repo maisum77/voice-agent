@@ -252,10 +252,29 @@ class VoiceAgent:
                 parts.append(f"[{seg.nonverbal}]")
         return "".join(parts)
 
+    def run_voice_loop(self, stt_backend: str = "auto", stt_model: str = "tiny",
+                       stt_device: str = "cpu", vad_threshold: float = 0.5,
+                       on_user_text=None, on_assistant_text=None) -> None:
+        """Start the real-time interruptible voice loop."""
+        from pipeline.realtime.stt import make_stt
+        from pipeline.realtime.voice_loop import VoiceLoop
+
+        system = SYSTEM_PROMPT.read_text(encoding="utf-8").strip() if SYSTEM_PROMPT.exists() else ""
+        stt = make_stt(stt_backend, model=stt_model, device=stt_device)
+        loop = VoiceLoop(
+            agent=self,
+            system_prompt=system,
+            stt=stt,
+            vad_threshold=vad_threshold,
+            on_user_text=on_user_text,
+            on_assistant_text=on_assistant_text,
+        )
+        loop.run()
+
+
     def cancel(self) -> int:
         """Barge-in: bump the epoch so in-flight synthesis is dropped."""
         return self.guard.cancel()
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -270,8 +289,16 @@ def main() -> int:
                     help="cpu | mps | cuda (TTS engine device, default cpu)")
     ap.add_argument("--tts-dtype", default="float32",
                     help="float32 | bfloat16 | float16 (TTS engine dtype)")
+    ap.add_argument("--voice-loop", action="store_true",
+                    help="start the real-time interruptible voice loop")
+    ap.add_argument("--stt-backend", default="auto",
+                    help="auto | pywhispercpp | faster-whisper | whisper")
+    ap.add_argument("--stt-model", default="tiny",
+                    help="STT model name/size")
     ap.add_argument("--setup-tts", action="store_true",
                     help="check for a voice bank and report TTS readiness")
+
+
     args = ap.parse_args()
 
     agent = VoiceAgent(args.base, args.adapter, device=args.device,
@@ -279,8 +306,15 @@ def main() -> int:
                        tts_dtype=args.tts_dtype)
     agent.setup_tts()
 
+    if args.voice_loop:
+        agent.run_voice_loop(stt_backend=args.stt_backend, stt_model=args.stt_model)
+        return 0
+
     if args.setup_tts:
         return 0
+
+
+
 
     turns = [args.prompt] if args.prompt else None
 

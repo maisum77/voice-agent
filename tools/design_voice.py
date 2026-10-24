@@ -56,17 +56,19 @@ EMOTION_DIRECTIVES = {
     "serious": "Calm, level and grave. No humour whatsoever. Weight on every word.",
 }
 
-# The reference line each clip speaks. It should be neutral enough to be
-# delivered any way, and short enough to keep the clips small.
-REFERENCE_LINE = (
-    "Right, let's get this sorted. Tell me what you are seeing and we will "
-    "work through it together."
-)
+# Short per-clip reference lines. Voice cloning quality degrades with long
+# references (>10s), so each clip speaks a short neutral line. The ref_text
+# stored in the bank must match what the clip actually says.
+CLIP_REF_LINES = {
+    "neutral": "Right, let's get this sorted.",
+    "amused": "Right, let's get this sorted.",
+    "warm": "Right, let's get this sorted.",
+    "focused": "Right, let's get this sorted.",
+    "serious": "Right, let's get this sorted.",
+}
 
-# Non-verbal clips are rendered as short lines that *contain* the sound, then
-# used verbatim when spliced into a reply. They have to be in the same voice
-# as the delivery clips, or the splice is audible.
-NONVERBAL_LINES = {
+# Non-verbal reference lines (used for consistency, not cloning targets).
+NONVERBAL_REF_LINES = {
     "laugh": "Ha! Ha! That is brilliant, genuinely.",
     "chuckle": "Heh. Nice one, that.",
     "sigh": "Ohhh. Right then. Deep breath.",
@@ -74,6 +76,11 @@ NONVERBAL_LINES = {
     "hm": "Hmm. Right, let me think about that.",
     "erm": "Erm. Let me see.",
 }
+
+# Non-verbal clips are rendered as short lines that *contain* the sound, then
+# used verbatim when spliced into a reply. They have to be in the same voice
+# as the delivery clips, or the splice is audible.
+# (defined above as NONVERBAL_REF_LINES)
 
 SPEAKER_HINT = (
     "A warm British male voice in his early thirties, low and unhurried, "
@@ -121,10 +128,12 @@ def render_bank(
     for emotion, directive in EMOTION_DIRECTIVES.items():
         instruct = build_instruct(description, emotion)
         print(f"  rendering {emotion}...")
+        ref_line = CLIP_REF_LINES[emotion]
         wavs, sr = model.generate_voice_design(
-            text=REFERENCE_LINE,
+            text=ref_line,
             language="English",
             instruct=instruct,
+            max_new_tokens=32,
         )
         audio = np.asarray(wavs[0], dtype="float32")
         path = out_dir / f"{emotion}.wav"
@@ -134,19 +143,20 @@ def render_bank(
             "sample_rate": int(sr),
             "duration_s": round(len(audio) / sr, 3),
             "instruct": instruct,
-            "ref_text": REFERENCE_LINE,
+            "ref_text": ref_line,
         }
         print(f"    {len(audio) / sr:.2f}s -> {path}")
 
     # Non-verbal clips, same voice, same description.
     nonverbals = {}
     neutral_instruct = build_instruct(description, "neutral")
-    for name, line in NONVERBAL_LINES.items():
+    for name, line in NONVERBAL_REF_LINES.items():
         print(f"  rendering {name}...")
         wavs, sr = model.generate_voice_design(
             text=line,
             language="English",
             instruct=neutral_instruct,
+            max_new_tokens=32,
         )
         audio = np.asarray(wavs[0], dtype="float32")
         path = out_dir / f"nv_{name}.wav"
@@ -162,7 +172,7 @@ def render_bank(
     manifest = {
         "model": model_path,
         "description": description,
-        "reference_line": REFERENCE_LINE,
+        "reference_line": CLIP_REF_LINES["neutral"],
         "clips": clips,
         "nonverbals": nonverbals,
     }

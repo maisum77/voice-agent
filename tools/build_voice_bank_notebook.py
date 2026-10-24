@@ -138,7 +138,6 @@ import design_voice
 # The module's own defaults point at its own tree; override the two that
 # matter for this run.
 design_voice.VOICE_DIR = OUT_DIR
-design_voice.REFERENCE_LINE = REFERENCE_LINE
 design_voice.SPEAKER_HINT = VOICE_DESCRIPTION
 
 import time

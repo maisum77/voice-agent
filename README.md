@@ -250,7 +250,23 @@ adapter and trained it to nothing.
 
 ---
 
+## Real-time voice loop
+
+Free/open-source loop (talk → emotion-aware reply → speech, with barge-in):
+
+```bash
+.venv/bin/python -m pip install sounddevice numpy scipy librosa
+.venv/bin/python -m pip install silero-vad  # or rely on energy VAD fallback
+.venv/bin/python -m pip install faster-whisper  # or pywhispercpp / openai-whisper
+.venv/bin/python tools/voice_loop.py --stt-model base --vad-threshold 0.4
+```
+
+Modules live under `pipeline/realtime/` (audio_io, vad, stt, llm_stream, tts_worker, voice_loop).
+Barge-in reuses `GenerationGuard` via a shared epoch counter; the reply is generated in
+full before the guard + segmenter + TTS, so emotion correctness is preserved.
+
 ## Layout
+
 
 ```
 tools/
@@ -273,7 +289,9 @@ tools/
   build_kaggle_notebook.py   generates the Kaggle notebook from these files
   test_kaggle_notebook.py    runs that notebook's cells on a laptop
 pipeline/
+  realtime/...            real-time voice loop (audio, VAD, STT, streaming LLM, TTS worker)
   tts/segmenter.py           tagged reply -> speech + non-verbal segments
+
   tts/qwen3.py               bank cloning, splicing, interruption guard
 bench/
   audition.py                render the model's replies to audio
